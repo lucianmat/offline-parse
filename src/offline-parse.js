@@ -650,6 +650,176 @@
             });
     }
 
+    function _sync_To_Server(options) {
+
+        if (!app || !app.online) {
+            return Promise.resolve(false);
+        }
+        return new Promise(function (resolve, reject) {
+            return _db.get('_local/synced_seq')['catch'](function (err) {
+                if (err.status !== 404) {
+                    throw err;
+                }
+                return { count: 0 };
+            })
+                .then(function (scnt) {
+                    var sncParams = { since: scnt.count, include_docs: true },
+                        chnd;
+    
+                    if (options && options.doc_ids) {
+                        sncParams.doc_ids = options.doc_ids;
+                    }
+                    chnd = _db.changes(sncParams)
+                        .on('complete', function (rzc) {
+                            var i, obChanges = {}, ok;
+                            for (i = 0; i < rzc.results.length; i++) {
+                                ok = rzc.results[i].id.split('#');
+                                if (ok.length === 2 && _db.__collections[ok[0]]) {
+                                    obChanges[ok[0]] = obChanges[ok[0]] || { updated: [], deleted: [] };
+                                    if (rzc.results[i].deleted) {
+                                        if ((ok[1].indexOf('local') !== 0) && (ok[1].indexOf('new') !== 0)) {
+                                            obChanges[ok[0]].deleted.push(ok[1]);
+                                        }
+                                    } else {
+                                        obChanges[ok[0]].updated.push(ok[1]);
+                                    }
+                                }
+                            }
+                            // chnd.cancel();
+    
+                            return Object.keys(obChanges).reduce(function (pms, clName) {
+                                return pms.then(function () {
+                                    return _try_sync_to_server(clName, obChanges[clName]);
+                                });
+                            }, Promise.resolve())
+                                .then(function () {
+                                    if (options && options.doc_ids) {
+                                        return;
+                                    }
+                                    return _db.compact()
+                                        .then(function () {
+                                            return _db.upsert('_local/synced_seq', { count: rzc.last_seq });
+                                        });
+                                }).then(resolve, reject);
+                        })
+                        .on('error', reject);
+                });
+        });
+    }
+
+    function _syncToLocal(options) {
+        var obs = {};
+    
+        return (options && options.collections ? [options.collections] : Object.keys(_db.__collections).chunk(5)).reduce(function (pms, ark) {
+            return pms.then(function () {
+                return Promise.all(ark.map(function (cn) {
+                    var toPurge,
+                        ckn = '_local/db-col-' + cn;
+    
+                    if (options && (typeof options.progress === 'function')) {
+                        options.progress({ className: cn, status: 0 });
+                    }
+                    return Promise.resolve()
+                        .then(function () {
+                            if (options && !options.forceReload) {
+                                return _db.get(ckn)["catch"](function (err) {
+                                    if (err.status !== 404) {
+                                        throw err;
+                                    }
+                                    return { updatedAt: 0 };
+                                });
+                            }
+                            return _db.find({
+                                selector: { className: cn },
+                                fields: ['_id', '_rev']
+                            })
+                                .then(function (rdcs) {
+                                    var i;
+                                    if (!rdcs.docs || !rdcs.docs.length) {
+                                        return;
+                                    }
+                                    toPurge = rdcs.docs.map(function (mi) {
+                                        mi._deleted = true;
+                                        return mi;
+                                    });
+    
+                                    if (options && (typeof options.progress === 'function')) {
+                                        options.progress({ className: cn, status: 1 });
+                                    }
+                                    //return _db.bulkDocs(rdcs.docs)['catch'](function (err) {
+                                    //    console.error(err);
+                                    //});
+                                })
+                                .then(function () {
+                                    return { updatedAt: 0 };
+                                });
+                        })
+                        .then(function (doc) {
+                            var pms, npq,
+                                pqs = { count: true, limit: 0 };
+    
+                            if (doc.updatedAt && (!options || !options.forceReload)) {
+                                npq = new Parse.Query(cn);
+                                npq.greaterThan('updatedAt', new Date(doc.updatedAt));
+                                pqs.where = npq.toJSON().where;
+                            }
+                            if (options && (typeof options.progress === 'function')) {
+                                options.progress({ className: cn, status: 2 });
+                            }
+                            return _dbAdapters.query.find(cn, pqs, {
+                                fromServer: true
+                            })
+                                .then(function (rd) {
+                                    delete pqs.count;
+                                    pqs.limit = rd.count;
+                                    if (options && (typeof options.progress === 'function')) {
+                                        options.progress({ className: cn, status: 3, count: rd.count });
+                                    }
+                                    if (!rd.count) {
+                                        return Promise.resolve(doc.updatedAt);
+                                    }
+                                    return _dbAdapters.query.find(cn, pqs, {
+                                        fromServer: true,
+                                        beforeSaveLocal: function () {
+                                            return toPurge ? _db.bulkDocs(toPurge)['catch'](function (err) {
+                                                console.error(err);
+                                            }) : Promise.resolve();
+                                        }
+                                    })
+                                        .then(function (riz) {
+                                            var vi = doc.updatedAt, i, cid;
+                                            for (i = 0; i < riz.results.length; i++) {
+                                                cid = new Date(riz.results[i].updatedAt);
+    
+                                                if (vi < cid.getTime()) {
+                                                    vi = cid.getTime();
+                                                }
+                                            }
+                                            return vi;
+                                        });
+                                })
+                                .then(function (update) {
+                                    if (options && (typeof options.progress === 'function')) {
+                                        options.progress({ className: cn, status: 4 });
+                                    }
+                                    if (update && (update === doc.updatedAt)) {
+                                        return Promise.resolve(obs);
+                                    }
+                                    doc.updatedAt = update;
+                                    return _db.upsert(ckn, doc)
+                                        .then(function (rd) {
+                                            obs[cn] = rd.updated ? doc.updatedAt : false;
+                                            return obs;
+                                        });
+                                });
+                        });
+                }));
+            });
+        }, Promise.resolve())
+            .then(function () {
+                return obs;
+            });
+    }
 
     var Events = {};
     var eventSplitter = /\s+/;
@@ -970,7 +1140,9 @@
         APPLICATION_FIRST: 'APPLICATION_FIRST',
         SERVER_FIRST: 'SERVER_FIRST',
         getDatabase: getDatabase,
-        configure: _configureDbApp
+        configure: _configureDbApp,
+        syncToServer : _sync_To_Server,
+        sync : sync
     };
 
     extend(Parse.Database, Events);
