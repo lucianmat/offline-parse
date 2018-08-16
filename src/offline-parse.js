@@ -6,7 +6,17 @@
     }
 }(this, function (Parse, PouchDB) {
     var _db,
-        _config;
+        _config,
+        _connectionType = {
+            UNKNOWN: 'unknown',
+            ETHERNET: 'ethernet',
+            WIFI: 'wifi',
+            CELL_2G: '2g',
+            CELL_3G: '3g',
+            CELL_4G: '4g',
+            CELL: 'cellular',
+            NONE: 'none'
+        };
 
     if (!Array.isArray) {
         Array.isArray = function (arg) {
@@ -162,6 +172,121 @@
         return target;
     }
 
+
+    function _query_local(className, src, opt) {
+        var whr = { selector: Object.assign({ className: className }, src.where || {}) };
+        if (src.limit) {
+            whr.limit = src.limit;
+        }
+        if (src.order) {
+            whr.sort = src.order.split(',').map(function (si) {
+                var rs = {},
+                    ord = "asc";
+
+                if (si.indexOf('-') === 0) {
+                    ord = "desc";
+                    si = si.substr(1);
+                }
+                if (!whr.selector[si]) {
+                    whr.selector[si] = { $gt: true };
+                }
+                rs[si] = ord;
+                return rs;
+            });
+        }
+        var i, vk,
+            vks = Object.keys(whr.selector);
+        for (i = 0; i < vks.length; i++) {
+            vk = vks[i];
+            if (whr.selector[vk].__type === 'Pointer') {
+                whr.selector[vk + '.objectId'] = whr.selector[vk].objectId;
+                delete whr.selector[vk];
+            }
+        }
+        if (src.count && !src.limit) {
+            whr.fields = ['_id'];
+        }
+
+        return _db.find(whr)
+            .then(function (rd) {
+                var rz = { results: [] };
+
+                if (src.count) {
+                    rz.count = rd.docs.length;
+                }
+                if (!rd || !rd.docs || !rd.docs.length || (src.count && !src.limit)) {
+                    return rz;
+                }
+                rz.results = rd.docs.map(function (ri) {
+                    if (ri._id) {
+                        delete ri._id;
+                    }
+                    if (ri._rev) {
+                        delete ri._rev;
+                    }
+                    return ri;
+                });
+
+                if (!src.include) {
+                    return rz;
+                }
+
+                return src.include.split(',').chunk(3).reduce(function (pms, ainc) {
+                    return pms.then(function () {
+                        return Promise.all(ainc.map(function (ok) {
+                            var vj = [], i, cnm, slct = { selector: {} };
+
+                            for (i = 0; i < rz.results.length; i++) {
+                                if (rz.results[i][ok] &&
+                                    rz.results[i][ok].objectId &&
+                                    (vj.indexOf(rz.results[i][ok].objectId) === -1)) {
+                                    cnm = cnm || rz.results[i][ok].className;
+                                    vj.push(rz.results[i][ok].objectId);
+                                }
+                            }
+                            if (!cnm) {
+                                return Promise.resolve();
+                            }
+                            slct.selector.className = cnm;
+                            slct.selector.objectId = { $in: vj };
+
+                            return _db.find(slct)
+                                .then(function (ndc) {
+                                    var vds = {}, i;
+
+                                    if (ndc && ndc.docs) {
+                                        for (i = 0; i < ndc.docs.length; i++) {
+                                            vds[ndc.docs[i].objectId] = ndc.docs[i];
+                                            if (vds[ndc.docs[i].objectId]._id) {
+                                                delete vds[ndc.docs[i].objectId]._id;
+                                            }
+                                            if (vds[ndc.docs[i].objectId]._rev) {
+                                                delete vds[ndc.docs[i].objectId]._rev;
+                                            }
+                                        }
+                                        for (i = 0; i < rz.results.length; i++) {
+                                            if (rz.results[i][ok] &&
+                                                rz.results[i][ok].objectId &&
+                                                vds[rz.results[i][ok].objectId]) {
+                                                rz.results[i][ok] = vds[rz.results[i][ok].objectId];
+                                                rz.results[i][ok].__type = 'Object';
+                                            }
+                                        }
+                                    }
+                                });
+                        }));
+                    });
+                }, Promise.resolve())
+                    .then(function () {
+                        return rz;
+                    });
+
+            },
+                function (i) {
+                    Framework7.log(i);
+                });
+    }
+
     var _dbAdapters = {
         object: {
             destroy: function (target, options) {
@@ -221,7 +346,7 @@
                                 });
                             }, Promise.resolve());
                         }
-                        Parse.Database.emmit('error', err);
+                        Parse.Database.trigger('error', err);
                         return Promise.reject(err);
                     });
             },
@@ -242,7 +367,7 @@
                 }
                 if (!toServer || !className || !_db.__collections[className] ||
                     (_db.__collections[className].mode === Parse.Database.SERVER_FIRST) &&
-                    (!app || (app && app.online))) {
+                    Parse.Database.onLine) {
                     vk = className + '#' + target._getId();
 
                     return _dbAdapters._object.save(target, options)
@@ -285,7 +410,7 @@
                                 return Promise.reject(err);
                             }
                             if (err && err.code) {
-                                
+
                                 if ((err.code === 209) ||
                                     (err.code === 142) ||
                                     (err.code === 137) ||
@@ -646,9 +771,47 @@
                 Parse.CoreManager.setQueryController(_dbAdapters.query);
                 Parse.CoreManager.setObjectController(_dbAdapters.object);
 
+                Parse.CoreManager.setStorageController({
+                    async: 1,
+                    getItemAsync: function (path) {
+                        return _db.get('_local/' + path);
+                    },
+                    setItemAsync: function (path, value) {
+                        return _db.setItem('_local/' + path, value);
+                    },
+                    removeItemAsync: function (path) {
+                        return _db.get('_local/' + rid)
+                            .then(function (rd) {
+                                return _db.remove(rd);
+                            });
+                    },
+                    clear: function () {
+                        return Promise.reject('invalid operation');
+                    }
+                });
                 return _db;
             });
     }
+
+
+    function _connectionState() {
+        if (navigator.connection && typeof navigator.connection.getInfo === 'function') {
+            navigator.connection.getInfo(function (cnt) {
+
+                if (app.connection !== cnt) {
+                    if (cnt === _connectionType.NONE ||
+                        (cnt === _connectionType.UNKNOWN && device && device.platform !== 'browser')) {
+                        Parse.Database.onLine = false;
+                    } else {
+                        Parse.Database.onLine = true;
+                    }
+                }
+            });
+        } else {
+            Parse.Database.onLine = !!navigator.onLine;
+        }
+    }
+
 
     function _sync_To_Server(options) {
 
@@ -665,7 +828,7 @@
                 .then(function (scnt) {
                     var sncParams = { since: scnt.count, include_docs: true },
                         chnd;
-    
+
                     if (options && options.doc_ids) {
                         sncParams.doc_ids = options.doc_ids;
                     }
@@ -686,7 +849,7 @@
                                 }
                             }
                             // chnd.cancel();
-    
+
                             return Object.keys(obChanges).reduce(function (pms, clName) {
                                 return pms.then(function () {
                                     return _try_sync_to_server(clName, obChanges[clName]);
@@ -709,13 +872,13 @@
 
     function _syncToLocal(options) {
         var obs = {};
-    
+
         return (options && options.collections ? [options.collections] : Object.keys(_db.__collections).chunk(5)).reduce(function (pms, ark) {
             return pms.then(function () {
                 return Promise.all(ark.map(function (cn) {
                     var toPurge,
                         ckn = '_local/db-col-' + cn;
-    
+
                     if (options && (typeof options.progress === 'function')) {
                         options.progress({ className: cn, status: 0 });
                     }
@@ -742,7 +905,7 @@
                                         mi._deleted = true;
                                         return mi;
                                     });
-    
+
                                     if (options && (typeof options.progress === 'function')) {
                                         options.progress({ className: cn, status: 1 });
                                     }
@@ -757,7 +920,7 @@
                         .then(function (doc) {
                             var pms, npq,
                                 pqs = { count: true, limit: 0 };
-    
+
                             if (doc.updatedAt && (!options || !options.forceReload)) {
                                 npq = new Parse.Query(cn);
                                 npq.greaterThan('updatedAt', new Date(doc.updatedAt));
@@ -790,7 +953,7 @@
                                             var vi = doc.updatedAt, i, cid;
                                             for (i = 0; i < riz.results.length; i++) {
                                                 cid = new Date(riz.results[i].updatedAt);
-    
+
                                                 if (vi < cid.getTime()) {
                                                     vi = cid.getTime();
                                                 }
@@ -818,6 +981,29 @@
         }, Promise.resolve())
             .then(function () {
                 return obs;
+            });
+    }
+
+    function isDirty(options) {
+        return _db.get('_local/synced_seq')['catch'](function (err) {
+            if (err.status !== 404) {
+                throw err;
+            }
+            return { count: 0 };
+        })
+            .then(function (scnt) {
+                var sncParams = { since: scnt.count };
+
+                if (options && options.doc_ids) {
+                    sncParams.doc_ids = options.doc_ids;
+                }
+                return new Promise(function (resolve, reject) {
+                    _db.changes(sncParams)
+                        .on('complete', function (rzc) {
+                            return resolve(rzc && (rzc.last_seq !== scnt.count));
+                        })
+                        .on('error', reject);
+                });
             });
     }
 
@@ -1118,6 +1304,7 @@
     // Aliases for backwards compatibility.
     Events.bind = Events.on;
     Events.unbind = Events.off;
+    Events.emit = Events.trigger;
 
     PouchDB.plugin({
         upsert: _db_upsert,
@@ -1139,11 +1326,18 @@
     Parse.Database = {
         APPLICATION_FIRST: 'APPLICATION_FIRST',
         SERVER_FIRST: 'SERVER_FIRST',
+        onLine : !!navigator.onLine,
         getDatabase: getDatabase,
         configure: _configureDbApp,
-        syncToServer : _sync_To_Server,
-        sync : sync
+        syncToServer: _sync_To_Server,
+        sync: sync,
+        isDirty: _isDirty
     };
 
     extend(Parse.Database, Events);
+
+    if (document && typeof document.addEventListener === 'function') {
+        document.addEventListener("online", _connectionState, false);
+        document.addEventListener("offline", _connectionState, false);
+    }
 }));
