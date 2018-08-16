@@ -1,0 +1,15 @@
+{
+    "name": "offline-parse",
+    "version": "0.1.1",
+    "description": "The Parse Offline",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/lucianmat/offline-parse.git"
+    },
+    "bugs": "https://github.com/lucianmat/offline-parse/issues",
+    "files": [
+        "src/",
+        "LICENSE",
+        "README.md"
+    ]
+}
