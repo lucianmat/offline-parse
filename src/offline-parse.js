@@ -1331,7 +1331,7 @@
         configure: _configureDbApp,
         syncToServer: _sync_To_Server,
         sync: _syncToLocal,
-        isDirty: _isDirty
+        isDirty: isDirty
     };
 
     extend(Parse.Database, Events);
