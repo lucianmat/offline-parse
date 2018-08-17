@@ -1330,7 +1330,7 @@
         getDatabase: getDatabase,
         configure: _configureDbApp,
         syncToServer: _sync_To_Server,
-        sync: sync,
+        sync: _syncToLocal,
         isDirty: _isDirty
     };
 
