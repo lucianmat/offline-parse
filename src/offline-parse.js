@@ -798,7 +798,7 @@
         if (navigator.connection && typeof navigator.connection.getInfo === 'function') {
             navigator.connection.getInfo(function (cnt) {
 
-                if (app.connection !== cnt) {
+                if (Parse.Database._connection !== cnt) {
                     if (cnt === _connectionType.NONE ||
                         (cnt === _connectionType.UNKNOWN && device && device.platform !== 'browser')) {
                         Parse.Database.onLine = false;
@@ -806,6 +806,8 @@
                         Parse.Database.onLine = true;
                     }
                 }
+                
+                Parse.Database._connection = cnt;
             });
         } else {
             Parse.Database.onLine = !!navigator.onLine;
@@ -815,7 +817,7 @@
 
     function _sync_To_Server(options) {
 
-        if (!app || !app.online) {
+        if (!Framework7.Database.onLine) {
             return Promise.resolve(false);
         }
         return new Promise(function (resolve, reject) {
