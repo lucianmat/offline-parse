@@ -774,16 +774,40 @@
                 Parse.CoreManager.setStorageController({
                     async: 1,
                     getItemAsync: function (path) {
-                        return _db.get('_local/' + path);
+                        return getDatabase()
+                            .then(function () {
+                                return _db.get('_local/' + path)
+                                    .then(function (dc) {
+                                        return dc.val;
+                                    }, function (err) {
+                                        if (err.status !== 404) {
+                                            throw err;
+                                        }
+                                        return;
+                                    });
+                            });
+
                     },
                     setItemAsync: function (path, value) {
-                        return _db.setItem('_local/' + path, value);
+                        return getDatabase()
+                            .then(function () {
+                                return _db.upsert('_local/' + path, {val : value});
+                            });
                     },
                     removeItemAsync: function (path) {
-                        return _db.get('_local/' + rid)
-                            .then(function (rd) {
-                                return _db.remove(rd);
+                        return getDatabase()
+                            .then(function () {
+                                return _db.get('_local/' + rid)['catch'](function (err) {
+                                    if (err.status !== 404) {
+                                        throw err;
+                                    }
+                                    return;
+                                })
+                                    .then(function (rd) {
+                                        return rd ? _db.remove(rd) : false;
+                                    });
                             });
+
                     },
                     clear: function () {
                         return Promise.reject('invalid operation');
@@ -806,7 +830,7 @@
                         Parse.Database.onLine = true;
                     }
                 }
-                
+
                 Parse.Database._connection = cnt;
             });
         } else {
@@ -1328,7 +1352,7 @@
     Parse.Database = {
         APPLICATION_FIRST: 'APPLICATION_FIRST',
         SERVER_FIRST: 'SERVER_FIRST',
-        onLine : !!navigator.onLine,
+        onLine: !!navigator.onLine,
         getDatabase: getDatabase,
         configure: _configureDbApp,
         syncToServer: _sync_To_Server,
