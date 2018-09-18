@@ -7,6 +7,7 @@
 }(this, function (Parse, PouchDB) {
     var _db,
         _config,
+        _collectionsInited = false,
         _connectionType = {
             UNKNOWN: 'unknown',
             ETHERNET: 'ethernet',
@@ -290,335 +291,355 @@
     var _dbAdapters = {
         object: {
             destroy: function (target, options) {
-                return _dbAdapters._object.destroy(target, options)
-                    .then(function (ri) {
-                        var vk;
-                        if (Array.isArray(target)) {
-                            vk = target.chunk(5);
-                            return vk.reduce(function (pms, pka) {
-                                return pms.then(function () {
-                                    return Promise.all(pka.map(function (ti) {
-                                        var ki = ti.className + '#' + ti._getId();
-                                        return _db.get(ki)
-                                            .then(function (vi) {
-                                                return _db.remove(ki, vi._rev);
-                                            }, function (err) {
-                                                if (err.status !== 404) {
-                                                    throw err;
-                                                }
-                                            });
-                                    }));
-                                });
-                            }, Promise.resolve()).then(function () {
-                                return ri;
-                            });
-                        } else {
-                            vk = target.className + '#' + target._getId();
-                            return _db.get(vk)
-                                .then(function (vi) {
-                                    return _db.remove(vk, vi._rev);
-                                }, function (err) {
-                                    if (err.status !== 404) {
-                                        throw err;
-                                    }
-                                })
-                                .then(function () {
-                                    return ri;
-                                });
-                        }
-                    }, function (err) {
-                        if (err.code === Parse.Error.AGGREGATE_ERROR) {
-                            return err.errors.reduce(function (pmi, eri) {
-                                return pmi.then(function () {
-                                    if (eri.code === Parse.Error.OBJECT_NOT_FOUND) {
-                                        var ki = eri.object.className + '#' + eri.object._getId();
+                return _initCollections()
+                    .then(function () {
+                        return _dbAdapters._object.destroy(target, options)
+                            .then(function (ri) {
+                                var vk;
+                                if (Array.isArray(target)) {
+                                    vk = target.chunk(5);
+                                    return vk.reduce(function (pms, pka) {
+                                        return pms.then(function () {
+                                            return Promise.all(pka.map(function (ti) {
+                                                var ki = ti.className + '#' + ti._getId();
+                                                return _db.get(ki)
+                                                    .then(function (vi) {
+                                                        return _db.remove(ki, vi._rev);
+                                                    }, function (err) {
+                                                        if (err.status !== 404) {
+                                                            throw err;
+                                                        }
+                                                    });
+                                            }));
+                                        });
+                                    }, Promise.resolve()).then(function () {
+                                        return ri;
+                                    });
+                                } else {
+                                    vk = target.className + '#' + target._getId();
+                                    return _db.get(vk)
+                                        .then(function (vi) {
+                                            return _db.remove(vk, vi._rev);
+                                        }, function (err) {
+                                            if (err.status !== 404) {
+                                                throw err;
+                                            }
+                                        })
+                                        .then(function () {
+                                            return ri;
+                                        });
+                                }
+                            }, function (err) {
+                                if (err.code === Parse.Error.AGGREGATE_ERROR) {
+                                    return err.errors.reduce(function (pmi, eri) {
+                                        return pmi.then(function () {
+                                            if (eri.code === Parse.Error.OBJECT_NOT_FOUND) {
+                                                var ki = eri.object.className + '#' + eri.object._getId();
 
-                                        Parse.Database.trigger('missingObject', eri.object);
-                                        return _db.get(ki)
-                                            .then(function (vi) {
-                                                return _db.remove(ki, vi._rev);
-                                            }, function (err) {
-                                                if (err.status !== 404) {
-                                                    throw err;
-                                                }
-                                            });
-                                    }
-                                });
-                            }, Promise.resolve());
-                        }
-                        Parse.Database.trigger('error', err);
-                        return Promise.reject(err);
+                                                Parse.Database.trigger('missingObject', eri.object);
+                                                return _db.get(ki)
+                                                    .then(function (vi) {
+                                                        return _db.remove(ki, vi._rev);
+                                                    }, function (err) {
+                                                        if (err.status !== 404) {
+                                                            throw err;
+                                                        }
+                                                    });
+                                            }
+                                        });
+                                    }, Promise.resolve());
+                                }
+                                Parse.Database.trigger('error', err);
+                                return Promise.reject(err);
+                            });
                     });
+
             },
             save: function (target, options) {
-                var vk, vob, className = target && target.className ? target.className : false,
-                    toServer = options && options.toServer ? options.toServer : false;
-
-                if (Array.isArray(target)) {
-                    if (!target.length) {
-                        return Promise.resolve([]);
-                    }
-                    return Promise.all(target.map(function (oi) {
-                        return _dbAdapters.object.save(oi, options);
-                    }));
-                }
-                if (toServer) {
-                    delete options.toServer;
-                }
-                if (!toServer || !className || !_db.__collections[className] ||
-                    (_db.__collections[className].mode === Parse.Database.SERVER_FIRST) &&
-                    Parse.Database.onLine) {
-                    vk = className + '#' + target._getId();
-
-                    return _dbAdapters._object.save(target, options)
-                        .then(function (rj) {
-
-                            if (!target ||
-                                !target.className ||
-                                !_db.__collections[className]) {
-                                return rj;
-                            }
-
-                            return Promise.resolve()
-                                .then(function () {
-                                    var nid;
-                                    vob = rj.toJSON();
-                                    vob.className = className;
-                                    nid = vob.className + '#' + rj._getId();
-                                    if (vk === nid) {
-                                        return Promise.resolve();
-                                    }
-                                    return _db.get(vk)['catch'](function () {
-                                        return false;
-                                    })
-                                        .then(function (toPurge) {
-                                            vk = nid;
-                                            if (!toPurge) {
-                                                return;
-                                            }
-                                            return _db.remove(toPurge);
-                                        });
-                                }).then(function () {
-                                    return _db.upsert(vk, vob)
-                                        .then(function () {
-                                            return rj;
-                                        });
-                                });
-
-                        }, function (err) {
-                            if (!className || !_db.__collections[className]) {
-                                return Promise.reject(err);
-                            }
-                            if (err && err.code) {
-
-                                if ((err.code === 209) ||
-                                    (err.code === 142) ||
-                                    (err.code === 137) ||
-                                    (err.code === 119) ||
-                                    (err.code === 111) ||
-                                    (err.code === 106) ||
-                                    (err.code === 104) ||
-                                    (err.code === 103)) {
-                                    Parse.Database.trigger('error', err);
-                                    return;
-                                }
-                            }
-                            vob = target.toJSON();
-                            vob.className = className;
-                            vk = target.className + '#' + target._getId();
-                            return _db.upsert(vk, vob)
-                                .then(function () {
-                                    return target;
-                                });
-                        });
-                }
-
-                if (!className || !_db.__collections[className]) {
-                    return _dbAdapters._object.save(target, options);
-                }
-                vob = target.toJSON();
-                vob.className = className;
-                vk = target.className + '#' + target._getId();
-
-                return _db.upsert(vk, vob)
+                return _initCollections()
                     .then(function () {
-                        return _dbAdapters._object.save(target, options)
-                            .then(function (rid) {
-                                var nid = target.className + '#' + rid._getId();
-                                return Promise.resolve()
-                                    .then(function () {
-                                        if (nid === vk) {
+                        var vk, vob, className = target && target.className ? target.className : false,
+                            toServer = options && options.toServer ? options.toServer : false;
+
+                        if (Array.isArray(target)) {
+                            if (!target.length) {
+                                return Promise.resolve([]);
+                            }
+                            return Promise.all(target.map(function (oi) {
+                                return _dbAdapters.object.save(oi, options);
+                            }));
+                        }
+                        if (toServer) {
+                            delete options.toServer;
+                        }
+                        if (!toServer || !className || !_db.__collections[className] ||
+                            (_db.__collections[className].mode === Parse.Database.SERVER_FIRST) &&
+                            Parse.Database.onLine) {
+                            vk = className + '#' + target._getId();
+
+                            return _dbAdapters._object.save(target, options)
+                                .then(function (rj) {
+
+                                    if (!target ||
+                                        !target.className ||
+                                        !_db.__collections[className]) {
+                                        return rj;
+                                    }
+
+                                    return Promise.resolve()
+                                        .then(function () {
+                                            var nid;
+                                            vob = rj.toJSON();
+                                            vob.className = className;
+                                            nid = vob.className + '#' + rj._getId();
+                                            if (vk === nid) {
+                                                return Promise.resolve();
+                                            }
+                                            return _db.get(vk)['catch'](function () {
+                                                return false;
+                                            })
+                                                .then(function (toPurge) {
+                                                    vk = nid;
+                                                    if (!toPurge) {
+                                                        return;
+                                                    }
+                                                    return _db.remove(toPurge);
+                                                });
+                                        }).then(function () {
+                                            return _db.upsert(vk, vob)
+                                                .then(function () {
+                                                    return rj;
+                                                });
+                                        });
+
+                                }, function (err) {
+                                    if (!className || !_db.__collections[className]) {
+                                        return Promise.reject(err);
+                                    }
+                                    if (err && err.code) {
+
+                                        if ((err.code === 209) ||
+                                            (err.code === 142) ||
+                                            (err.code === 137) ||
+                                            (err.code === 119) ||
+                                            (err.code === 111) ||
+                                            (err.code === 106) ||
+                                            (err.code === 104) ||
+                                            (err.code === 103)) {
+                                            Parse.Database.trigger('error', err);
                                             return;
                                         }
-                                        return _db.get(vk)
-                                            .then(function (doc) {
-                                                return _db.remove(doc);
+                                    }
+                                    vob = target.toJSON();
+                                    vob.className = className;
+                                    vk = target.className + '#' + target._getId();
+                                    return _db.upsert(vk, vob)
+                                        .then(function () {
+                                            return target;
+                                        });
+                                });
+                        }
+
+                        if (!className || !_db.__collections[className]) {
+                            return _dbAdapters._object.save(target, options);
+                        }
+                        vob = target.toJSON();
+                        vob.className = className;
+                        vk = target.className + '#' + target._getId();
+
+                        return _db.upsert(vk, vob)
+                            .then(function () {
+                                return _dbAdapters._object.save(target, options)
+                                    .then(function (rid) {
+                                        var nid = target.className + '#' + rid._getId();
+                                        return Promise.resolve()
+                                            .then(function () {
+                                                if (nid === vk) {
+                                                    return;
+                                                }
+                                                return _db.get(vk)
+                                                    .then(function (doc) {
+                                                        return _db.remove(doc);
+                                                    });
+                                            })
+                                            .then(function () {
+                                                vob = rid.toJSON();
+                                                vob.className = className;
+                                                return _db.upsert(nid, vob);
+                                            })
+                                            .then(function () {
+                                                return rid;
                                             });
-                                    })
-                                    .then(function () {
-                                        vob = rid.toJSON();
-                                        vob.className = className;
-                                        return _db.upsert(nid, vob);
-                                    })
-                                    .then(function () {
-                                        return rid;
+                                    }, function (err) {
+                                        // todo : mark unsaved
+                                        Parse.Database.trigger('unsaved', target);
+                                        return Promise.reject(err);
                                     });
-                            }, function (err) {
-                                // todo : mark unsaved
-                                Parse.Database.trigger('unsaved', target);
-                                return Promise.reject(err);
                             });
                     });
+
             },
             fetch: function (target, forceFetch, options) {
-                var srvSearch = !_db.__collections[className] ||
-                    _db.__collections[className].mode === Parse.Database.SERVER_FIRST ||
-                    _db.__collections[className].updatedAt === 0;
+                return _initCollections()
+                    .then(function () {
+                        var srvSearch = !_db.__collections[className] ||
+                            _db.__collections[className].mode === Parse.Database.SERVER_FIRST ||
+                            _db.__collections[className].updatedAt === 0;
 
-                if (options && options.fromServer) {
-                    delete options.fromServer;
-                    srvSearch = true;
-                }
-                if (!srvSearch) {
-                    return _db._object.fetch(target, forceFetch, options);
-                }
-                if (Array.isArray(target)) {
-                    var ids = [], objs = [], cnm, results = [], error;
-                    target.forEach(function (el, i) {
-                        if (error) {
-                            return;
+                        if (options && options.fromServer) {
+                            delete options.fromServer;
+                            srvSearch = true;
                         }
-                        if (!className) {
-                            className = el.className;
+                        if (!srvSearch) {
+                            return _db._object.fetch(target, forceFetch, options);
                         }
-                        if (className !== el.className) {
-                            error = new Parse.Error(
-                                Parse.Error.INVALID_CLASS_NAME,
-                                'All objects should be of the same class'
-                            );
+                        if (Array.isArray(target)) {
+                            var ids = [], objs = [], cnm, results = [], error;
+                            target.forEach(function (el, i) {
+                                if (error) {
+                                    return;
+                                }
+                                if (!className) {
+                                    className = el.className;
+                                }
+                                if (className !== el.className) {
+                                    error = new Parse.Error(
+                                        Parse.Error.INVALID_CLASS_NAME,
+                                        'All objects should be of the same class'
+                                    );
+                                }
+                                if (!el.id) {
+                                    error = new Parse.Error(
+                                        Parse.Error.MISSING_OBJECT_ID,
+                                        'All objects must have an ID'
+                                    );
+                                }
+                                ids.push(el.id);
+                                objs.push(el);
+                                results.push(el);
+                            });
+                            if (error) {
+                                return Promise.reject(error);
+                            }
+                            var query = new Parse.Query(className);
+                            query.containedIn('objectId', ids);
+                            query._limit = ids.length;
+                            return query.find(options)
+                                .then(function (objects) {
+                                    var idMap = {};
+                                    objects.forEach(function (o) {
+                                        idMap[o.id] = o;
+                                    });
+
+                                    for (var i = 0; i < objs.length; i++) {
+                                        var obj = objs[i];
+                                        if (!obj || !obj.id || !idMap[obj.id]) {
+                                            if (forceFetch) {
+                                                return Promise.reject(
+                                                    new Parse.Error(
+                                                        Parse.Error.OBJECT_NOT_FOUND,
+                                                        'All objects must exist on the server.'
+                                                    )
+                                                );
+                                            }
+                                        }
+                                    }
+                                    if (!singleInstance) {
+                                        // If single instance objects are disabled, we need to replace the
+                                        for (var ij = 0; ij < results.length; ij++) {
+                                            var obji = results[ij];
+                                            if (obji && obji.id && idMap[obji.id]) {
+                                                var id = obji.id;
+                                                obji._finishFetch(idMap[id].toJSON());
+                                                results[ij] = idMap[id];
+                                            }
+                                        }
+                                    }
+                                    return Promise.resolve(results);
+                                });
+                        } else {
+                            var ti = target.className + '#' + target._getId();
+                            return _db.get(ti)
+                                .then(function (obi) {
+                                    if (target instanceof Parse.Object) {
+                                        target._clearPendingOps();
+                                        target._clearServerData();
+                                        if (obi._id) {
+                                            delete obi._id;
+                                        }
+                                        if (obi._rev) {
+                                            delete obi._rev;
+                                        }
+                                        target._finishFetch(obi);
+                                    }
+                                    return target;
+                                },
+                                    function (err) {
+                                        return target;
+                                    });
                         }
-                        if (!el.id) {
-                            error = new Parse.Error(
-                                Parse.Error.MISSING_OBJECT_ID,
-                                'All objects must have an ID'
-                            );
-                        }
-                        ids.push(el.id);
-                        objs.push(el);
-                        results.push(el);
                     });
-                    if (error) {
-                        return Promise.reject(error);
-                    }
-                    var query = new Parse.Query(className);
-                    query.containedIn('objectId', ids);
-                    query._limit = ids.length;
-                    return query.find(options)
-                        .then(function (objects) {
-                            var idMap = {};
-                            objects.forEach(function (o) {
-                                idMap[o.id] = o;
-                            });
-
-                            for (var i = 0; i < objs.length; i++) {
-                                var obj = objs[i];
-                                if (!obj || !obj.id || !idMap[obj.id]) {
-                                    if (forceFetch) {
-                                        return Promise.reject(
-                                            new Parse.Error(
-                                                Parse.Error.OBJECT_NOT_FOUND,
-                                                'All objects must exist on the server.'
-                                            )
-                                        );
-                                    }
-                                }
-                            }
-                            if (!singleInstance) {
-                                // If single instance objects are disabled, we need to replace the
-                                for (var ij = 0; ij < results.length; ij++) {
-                                    var obji = results[ij];
-                                    if (obji && obji.id && idMap[obji.id]) {
-                                        var id = obji.id;
-                                        obji._finishFetch(idMap[id].toJSON());
-                                        results[ij] = idMap[id];
-                                    }
-                                }
-                            }
-                            return Promise.resolve(results);
-                        });
-                } else {
-                    var ti = target.className + '#' + target._getId();
-                    return _db.get(ti)
-                        .then(function (obi) {
-                            if (target instanceof Parse.Object) {
-                                target._clearPendingOps();
-                                target._clearServerData();
-                                if (obi._id) {
-                                    delete obi._id;
-                                }
-                                if (obi._rev) {
-                                    delete obi._rev;
-                                }
-                                target._finishFetch(obi);
-                            }
-                            return target;
-                        },
-                            function (err) {
-                                return target;
-                            });
-                }
             }
         },
         query: {
             find: function (className, src, opt) {
-                var srvSearch = !_db.__collections[className] ||
-                    _db.__collections[className].mode === Parse.Database.SERVER_FIRST ||
-                    _db.__collections[className].updatedAt === 0,
-                    forceServer = false;
+                return _initCollections()
+                    .then(function () {
+                        var srvSearch = !_db.__collections[className] ||
+                            _db.__collections[className].mode === Parse.Database.SERVER_FIRST ||
+                            _db.__collections[className].updatedAt === 0,
+                            forceServer = false;
 
-                if (opt && opt.fromServer) {
-                    srvSearch = true;
-                    forceServer = true;
-                    delete opt.fromServer;
-                }
-
-                if (!srvSearch) {
-                    return _query_local(className, src, opt);
-                }
-
-                return _dbAdapters._query.find(className, src, opt)
-                    .then(function (rz) {
-                        if (!_db.__collections[className] || !rz.results.length) {
-                            return rz;
+                        if (opt && opt.fromServer) {
+                            srvSearch = true;
+                            forceServer = true;
+                            delete opt.fromServer;
                         }
-                        var vms, pms;
 
-                        vms = rz.results.map(function (ri) {
-                            ri.className = ri.className || className;
-                            ri._id = ri._id || className + '#' + ri.objectId;
-                            return ri;
-                        });
-                        pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
-                        return pms.then(function () {
-                            var vck = vms.chunk(5);
-                            return vck.reduce(function (opm, chv) {
-                                return opm.then(function () {
-                                    return Promise.all(chv.map(function (ri) {
-                                        var vid = className + '#' + ri.objectId;
-                                        return _db.upsert(vid, function (odc) {
-                                            return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
-                                        });
-                                    }));
-                                });
-                            }, Promise.resolve());
-                        }).then(function () {
-                            return rz;
-                        });
-                    }, function (eri) {
-                        if (eri && (eri.code === 100 || eri.code === 107) && !forceServer) {
+                        if (src && src.fromServer) {
+                            srvSearch = true;
+                            forceServer = true;
+                            delete src.fromServer;
+                        }
+
+                        if (!srvSearch) {
                             return _query_local(className, src, opt);
                         }
-                        return Promise.reject(eri);
+
+                        return _dbAdapters._query.find(className, src, opt)
+                            .then(function (rz) {
+                                if (!_db.__collections[className] || !rz.results.length) {
+                                    return rz;
+                                }
+                                var vms, pms;
+
+                                vms = rz.results.map(function (ri) {
+                                    ri.className = ri.className || className;
+                                    ri._id = ri._id || className + '#' + ri.objectId;
+                                    return ri;
+                                });
+                                pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
+                                return pms.then(function () {
+                                    var vck = vms.chunk(5);
+                                    return vck.reduce(function (opm, chv) {
+                                        return opm.then(function () {
+                                            return Promise.all(chv.map(function (ri) {
+                                                var vid = className + '#' + ri.objectId;
+                                                return _db.upsert(vid, function (odc) {
+                                                    return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                                                });
+                                            }));
+                                        });
+                                    }, Promise.resolve());
+                                }).then(function () {
+                                    return rz;
+                                });
+                            }, function (eri) {
+                                if (eri && (eri.code === 100 || eri.code === 107) && !forceServer) {
+                                    return _query_local(className, src, opt);
+                                }
+                                return Promise.reject(eri);
+                            });
                     });
             }
         }
@@ -711,6 +732,48 @@
         return _db ? Promise.resolve(_db) : _configureDbApp();
     }
 
+    function _initCollections(options) {
+        if (_collectionsInited) {
+            return Promise.resolve();
+        }
+        return getDatabase(options)
+            .then(function () {
+                return Promise.all(Object.keys(_config.collections)
+                    .map(function (mk) {
+                        var docId = '_local/db-col-' + mk;
+
+                        return _db.get(docId)["catch"](function (err) {
+                            if (err.status !== 404) {
+                                throw err;
+                            }
+                            return _db_tryAndPut(_db, { _id: docId, updatedAt: 0 }, false);
+                        }).then(function (doc) {
+                            var md = _config.collections[mk];
+                            if (md === Parse.Database.APPLICATION_FIRST ||
+                                md === Parse.Database.SERVER_FIRST) {
+                                md = { mode: md };
+                            }
+                            _db.__collections[mk] = extend(doc, md);
+                            md.index = md.index || ['className'];
+
+                            return md.index.reduce(function (pms, ik) {
+                                return pms.then(function () {
+                                    var ifl = ik.split(',');
+                                    if (ifl.indexOf('className') === -1) {
+                                        ifl.push('className');
+                                    }
+                                    return _db.createIndex({ index: { fields: ifl } });
+                                });
+
+                            }, Promise.resolve());
+                        });
+                    }));
+            }).then(function () {
+                _collectionsInited = true;
+            });
+
+    }
+
     function _configureDbApp(options) {
         _config = options || {};
         _config.database = _config.database || {};
@@ -732,89 +795,53 @@
         _db = new PouchDB(_config.name, _config.database);
         _db.__collections = {};
 
-        return Promise.all(Object.keys(_config.collections)
-            .map(function (mk) {
-                var docId = '_local/db-col-' + mk;
+        _dbAdapters._query = Parse.CoreManager.getQueryController();
+        _dbAdapters._object = Parse.CoreManager.getObjectController();
 
-                return _db.get(docId)["catch"](function (err) {
-                    if (err.status !== 404) {
-                        throw err;
-                    }
-                    return _db_tryAndPut(_db, { _id: docId, updatedAt: 0 }, false);
-                }).then(function (doc) {
-                    var md = _config.collections[mk];
-                    if (md === Parse.Database.APPLICATION_FIRST ||
-                        md === Parse.Database.SERVER_FIRST) {
-                        md = { mode: md };
-                    }
-                    _db.__collections[mk] = extend(doc, md);
-                    md.index = md.index || ['className'];
+        _dbAdapters.query.aggregate = _dbAdapters._query.aggregate;
 
-                    return md.index.reduce(function (pms, ik) {
-                        return pms.then(function () {
-                            var ifl = ik.split(',');
-                            if (ifl.indexOf('className') === -1) {
-                                ifl.push('className');
+        Parse.CoreManager.setQueryController(_dbAdapters.query);
+        Parse.CoreManager.setObjectController(_dbAdapters.object);
+
+        Parse.CoreManager.setStorageController({
+            async: 1,
+            getItemAsync: function (path) {
+                return getDatabase()
+                    .then(function () {
+                        return _db.get('_local/' + path)
+                            .then(function (dc) {
+                                return dc.val;
+                            }, function (err) {
+                                if (err.status !== 404) {
+                                    throw err;
+                                }
+                                return;
+                            });
+                    });
+
+            },
+            setItemAsync: function (path, value) {
+                return getDatabase()
+                    .then(function () {
+                        return _db.upsert('_local/' + path, { val: value });
+                    });
+            },
+            removeItemAsync: function (path) {
+                return getDatabase()
+                    .then(function () {
+                        return _db.get('_local/' + rid)['catch'](function (err) {
+                            if (err.status !== 404) {
+                                throw err;
                             }
-                            return _db.createIndex({ index: { fields: ifl } });
-                        });
-
-                    }, Promise.resolve());
-                });
-            }))
-            .then(function () {
-                _dbAdapters._query = Parse.CoreManager.getQueryController();
-                _dbAdapters._object = Parse.CoreManager.getObjectController();
-
-                _dbAdapters.query.aggregate = _dbAdapters._query.aggregate;
-
-                Parse.CoreManager.setQueryController(_dbAdapters.query);
-                Parse.CoreManager.setObjectController(_dbAdapters.object);
-
-                Parse.CoreManager.setStorageController({
-                    async: 1,
-                    getItemAsync: function (path) {
-                        return getDatabase()
-                            .then(function () {
-                                return _db.get('_local/' + path)
-                                    .then(function (dc) {
-                                        return dc.val;
-                                    }, function (err) {
-                                        if (err.status !== 404) {
-                                            throw err;
-                                        }
-                                        return;
-                                    });
+                            return;
+                        })
+                            .then(function (rd) {
+                                return rd ? _db.remove(rd) : false;
                             });
-
-                    },
-                    setItemAsync: function (path, value) {
-                        return getDatabase()
-                            .then(function () {
-                                return _db.upsert('_local/' + path, {val : value});
-                            });
-                    },
-                    removeItemAsync: function (path) {
-                        return getDatabase()
-                            .then(function () {
-                                return _db.get('_local/' + rid)['catch'](function (err) {
-                                    if (err.status !== 404) {
-                                        throw err;
-                                    }
-                                    return;
-                                })
-                                    .then(function (rd) {
-                                        return rd ? _db.remove(rd) : false;
-                                    });
-                            });
-
-                    },
-                    clear: function () {
-                        return Promise.reject('invalid operation');
-                    }
-                });
-                return _db;
-            });
+                    });
+            }
+        });
+        return Promise.resolve(_db);
     }
 
 
@@ -1007,6 +1034,27 @@
         }, Promise.resolve())
             .then(function () {
                 return obs;
+            });
+    }
+
+    function _mark_synced() {
+        return _db.get('_local/synced_seq')['catch'](function (err) {
+            if (err.status !== 404) {
+                throw err;
+            }
+            return { count: 0 };
+        })
+            .then(function (scnt) {
+                var sncParams = { since: scnt.count };
+
+                return new Promise(function (resolve, reject) {
+                    _db.changes(sncParams)
+                        .on('complete', function (rzc) {
+                            return _db.upsert('_local/synced_seq', { count: rzc.last_seq })
+                                .then(resolve, reject);
+                        })
+                        .on('error', reject);
+                });
             });
     }
 
@@ -1357,7 +1405,9 @@
         configure: _configureDbApp,
         syncToServer: _sync_To_Server,
         sync: _syncToLocal,
-        isDirty: isDirty
+        isDirty: isDirty,
+        _initCollections: _initCollections,
+        _mark_synced: _mark_synced
     };
 
     extend(Parse.Database, Events);
