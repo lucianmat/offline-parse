@@ -1080,6 +1080,35 @@
                 });
             });
     }
+    
+    function _uploadToLocal(results, className, opt) {
+        if (!_db.__collections[className] || !results || !results.length) {
+            return Promise.resolve(results);
+        }
+        var vms, pms;
+
+        vms = results.map(function (ri) {
+            ri.className = ri.className || className;
+            ri._id = ri._id || className + '#' + ri.objectId;
+            return ri;
+        });
+        pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
+        return pms.then(function () {
+            var vck = vms.chunk(5);
+            return vck.reduce(function (opm, chv) {
+                return opm.then(function () {
+                    return Promise.all(chv.map(function (ri) {
+                        var vid = className + '#' + ri.objectId;
+                        return _db.upsert(vid, function (odc) {
+                            return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                        });
+                    }));
+                });
+            }, Promise.resolve());
+        }).then(function () {
+            return results;
+        });
+    }
 
     var Events = {};
     var eventSplitter = /\s+/;
@@ -1406,6 +1435,7 @@
         syncToServer: _sync_To_Server,
         sync: _syncToLocal,
         isDirty: isDirty,
+        uploadToLocal : _uploadToLocal,
         _initCollections: _initCollections,
         _mark_synced: _mark_synced
     };
