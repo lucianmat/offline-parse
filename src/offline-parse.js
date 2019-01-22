@@ -1093,7 +1093,12 @@
             return ri;
         });
         pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
-        return pms.then(function () {
+       
+        return opt && opt.useBulks ?
+            pms.then(function () {
+                return _db.bulkDocs(vms);
+            })
+        : pms.then(function () {
             var vck = vms.chunk(5);
             return vck.reduce(function (opm, chv) {
                 return opm.then(function () {
