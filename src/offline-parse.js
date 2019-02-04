@@ -829,7 +829,7 @@
             removeItemAsync: function (path) {
                 return getDatabase()
                     .then(function () {
-                        return _db.get('_local/' + rid)['catch'](function (err) {
+                        return _db.get('_local/' + path)['catch'](function (err) {
                             if (err.status !== 404) {
                                 throw err;
                             }
