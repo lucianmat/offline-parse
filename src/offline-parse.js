@@ -633,10 +633,10 @@
                                                             });
                                                         }));
                                                     }).then(resolve, reject);
-                                                }, 10);
+                                                }, 30);
                                             });
                                         }, Promise.resolve());
-                                    },1);
+                                    },10);
                                    
                                 }).then(function () {
                                     return rz;
