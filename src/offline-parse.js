@@ -620,17 +620,24 @@
                                 });
                                 pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
                                 return pms.then(function () {
-                                    var vck = vms.chunk(5);
-                                    return vck.reduce(function (opm, chv) {
-                                        return opm.then(function () {
-                                            return Promise.all(chv.map(function (ri) {
-                                                var vid = className + '#' + ri.objectId;
-                                                return _db.upsert(vid, function (odc) {
-                                                    return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
-                                                });
-                                            }));
-                                        });
-                                    }, Promise.resolve());
+                                    setTimeout(function () {
+                                        var vck = vms.chunk(5);
+                                        return vck.reduce(function (opm, chv) {
+                                            return new Promise(function (resolve, reject) {
+                                                setTimeout(function () {
+                                                    return opm.then(function () {
+                                                        return Promise.all(chv.map(function (ri) {
+                                                            var vid = className + '#' + ri.objectId;
+                                                            return _db.upsert(vid, function (odc) {
+                                                                return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                                                            });
+                                                        }));
+                                                    }).then(resolve, reject);
+                                                }, 10);
+                                            });
+                                        }, Promise.resolve());
+                                    },1);
+                                   
                                 }).then(function () {
                                     return rz;
                                 });
