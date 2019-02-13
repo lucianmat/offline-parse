@@ -92,6 +92,73 @@
         });
     }
 
+    if (!Array.prototype.forEach) {
+
+        Array.prototype.forEach = function(callback/*, thisArg*/) {
+      
+          var T, k;
+      
+          if (this == null) {
+            throw new TypeError('this is null or not defined');
+          }
+      
+          var O = Object(this);    
+          var len = O.length >>> 0;
+      
+          if (typeof callback !== 'function') {
+            throw new TypeError(callback + ' is not a function');
+          }
+      
+          if (arguments.length > 1) {
+            T = arguments[1];
+          }
+      
+          k = 0;
+          while (k < len) {
+            var kValue;
+            if (k in O) {
+              kValue = O[k];
+              callback.call(T, kValue, k, O);
+            }
+            k++;
+          }
+        };
+      }
+
+    if (!Array.prototype.find) {
+        Object.defineProperty(Array.prototype, 'find', {
+          value: function(predicate) {
+            if (this == null) {
+              throw new TypeError('"this" is null or not defined');
+            }
+      
+            var o = Object(this);
+      
+            var len = o.length >>> 0;
+      
+            if (typeof predicate !== 'function') {
+              throw new TypeError('predicate must be a function');
+            }
+      
+            var thisArg = arguments[1];
+      
+            var k = 0;
+      
+            while (k < len) {
+              var kValue = o[k];
+              if (predicate.call(thisArg, kValue, k, o)) {
+                return kValue;
+              }
+              k++;
+            }
+      
+            return undefined;
+          },
+          configurable: true,
+          writable: true
+        });
+      }
+
     function guid() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
             var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
@@ -358,7 +425,8 @@
             save: function (target, options) {
                 return _initCollections()
                     .then(function () {
-                        var vk, vob, className = target && target.className ? target.className : false,
+                        var pms,
+                            vk, vob, className = target && target.className ? target.className : false,
                             toServer = options && options.toServer ? options.toServer : false;
 
                         if (Array.isArray(target)) {
@@ -377,8 +445,17 @@
                             Parse.Database.onLine) {
                             vk = className + '#' + target._getId();
 
-                            return _dbAdapters._object.save(target, options)
-                                .then(function (rj) {
+
+                            return _getTrigger('beforeSave', className, target, 
+                                Framework7.utils.extend({server : true}, options || {}))
+                            .then(function (tgt) {
+                                if (!tgt) {
+                                    return;
+                                }
+                                target = tgt;
+                                return _dbAdapters._object.save(target, options);
+                                
+                            }).then(function (rj) {
 
                                     if (!target ||
                                         !target.className ||
@@ -430,12 +507,21 @@
                                             return;
                                         }
                                     }
-                                    vob = target.toJSON();
-                                    vob.className = className;
-                                    vk = target.className + '#' + target._getId();
-                                    return _db.upsert(vk, vob)
-                                        .then(function () {
-                                            return target;
+
+                                    return _getTrigger('beforeSave',className, target, 
+                                            Framework7.utils.extend({local : true, fallback : true}, options || {}) )
+                                        .then(function (tgt) {
+                                            if (!tgt) {
+                                                return;
+                                            }
+                                            target = tgt;
+                                            vob = target.toJSON();
+                                            vob.className = className;
+                                            vk = target.className + '#' + target._getId();
+                                            return _db.upsert(vk, vob)
+                                                .then(function () {
+                                                    return target;
+                                                });
                                         });
                                 });
                         }
@@ -619,25 +705,24 @@
                                     return ri;
                                 });
                                 pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
-                                return pms.then(function () {
-                                    setTimeout(function () {
-                                        var vck = vms.chunk(5);
-                                        return vck.reduce(function (opm, chv) {
-                                            return new Promise(function (resolve, reject) {
-                                                setTimeout(function () {
-                                                    return opm.then(function () {
-                                                        return Promise.all(chv.map(function (ri) {
-                                                            var vid = className + '#' + ri.objectId;
-                                                            return _db.upsert(vid, function (odc) {
-                                                                return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
-                                                            });
-                                                        }));
-                                                    }).then(resolve, reject);
-                                                }, 30);
-                                            });
-                                        }, Promise.resolve());
-                                    },10);
-                                   
+                               
+                                return pms
+                                    .then(function () {
+                                        return _getTrigger('beforeSave', className, vms, 
+                                        Framework7.utils.extend({local : true}, opt || {}));
+                                    })
+                                    .then(function () {
+                                    var vck = vms.chunk(5);
+                                    return vck.reduce(function (opm, chv) {
+                                        return opm.then(function () {
+                                            return Promise.all(chv.map(function (ri) {
+                                                var vid = className + '#' + ri.objectId;
+                                                return _db.upsert(vid, function (odc) {
+                                                    return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                                                });
+                                            }));
+                                        });
+                                    }, Promise.resolve());
                                 }).then(function () {
                                     return rz;
                                 });
@@ -733,6 +818,21 @@
         promise.then(function (resp) {
             cb(null, resp);
         }, cb);
+    }
+
+    function _getTrigger(name, cls, ob, opts) {
+        var pms = Promise.resolve(ob);
+        if (Parse.Database.triggers[name]) {
+            pms = pms.then(function (po) {
+                return Parse.Database.triggers[name](po, opts);
+            });
+        }
+        if (Parse.Database.triggers[cls] && Parse.Database.triggers[cls][name]) {
+           pms = pms.then(function (po) {
+               return Parse.Database.triggers[cls][name](po, opts);
+           });
+        }
+        return pms;
     }
 
     function getDatabase() {
@@ -978,21 +1078,38 @@
                                 });
                         })
                         .then(function (doc) {
-                            var pms, npq,
-                                pqs = { count: true, limit: 0 };
+                            var pms, npq, pqs;
 
-                            if (doc.updatedAt && (!options || !options.forceReload)) {
-                                npq = new Parse.Query(cn);
-                                npq.greaterThan('updatedAt', new Date(doc.updatedAt));
-                                pqs.where = npq.toJSON().where;
-                            }
                             if (options && (typeof options.progress === 'function')) {
                                 options.progress({ className: cn, status: 2 });
                             }
-                            return _dbAdapters.query.find(cn, pqs, {
-                                fromServer: true
-                            })
+                            npq = new Parse.Query(cn);
+                            
+                            if (doc.updatedAt && (!options || !options.forceReload)) {
+                                npq.greaterThan('updatedAt', new Date(doc.updatedAt));
+                            }
+                            
+                           
+                            return _getTrigger('beforeQuery', cn, npq, Framework7.utils.extend({}, options || {}, { 
+                                fromServer: true,
+                                sync : true
+                            }))
+                                .then(function (npq) {
+                                    if (!npq) {
+                                        pqs = false;
+                                        return;
+                                    }
+                                    pqs = npq.toJSON();
+                                    pqs.count = true;
+                                    pqs.limit = 0;
+                                    return _dbAdapters.query.find(cn, pqs, {
+                                        fromServer: true
+                                    });
+                                })
                                 .then(function (rd) {
+                                    if (!pqs) {
+                                        return;
+                                    }
                                     delete pqs.count;
                                     pqs.limit = rd.count;
                                     if (options && (typeof options.progress === 'function')) {
@@ -1449,7 +1566,8 @@
         isDirty: isDirty,
         uploadToLocal : _uploadToLocal,
         _initCollections: _initCollections,
-        _mark_synced: _mark_synced
+        _mark_synced: _mark_synced,
+        triggers : {}
     };
 
     extend(Parse.Database, Events);
