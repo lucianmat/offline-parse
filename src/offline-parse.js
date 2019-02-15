@@ -159,6 +159,39 @@
         });
       }
 
+      if (!Array.prototype.filter){
+        Array.prototype.filter = function(func, thisArg) {
+          'use strict';
+          if ( ! ((typeof func === 'Function' || typeof func === 'function') && this) )
+              throw new TypeError();
+         
+          var len = this.length >>> 0,
+              res = new Array(len), // preallocate array
+              t = this, c = 0, i = -1;
+          if (thisArg === undefined){
+            while (++i !== len){
+               if (i in this){
+                if (func(t[i], i, t)){
+                  res[c++] = t[i];
+                }
+              }
+            }
+          }
+          else{
+            while (++i !== len){
+              if (i in this){
+                if (func.call(thisArg, t[i], i, t)){
+                  res[c++] = t[i];
+                }
+              }
+            }
+          }
+         
+          res.length = c; // shrink down array to proper size
+          return res;
+        };
+      }
+
     function guid() {
         return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
             var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
@@ -241,12 +274,28 @@
     }
 
 
-    function _query_local(className, src, opt) {
-        var whr = { selector: Object.assign({ className: className }, src.where || {}) };
-        if (src.limit) {
+    function _query_local(className, vq, opt) {
+        var src, whr;
+
+        if (!vq) {
+            if (typeof className.toJSON === 'function') {
+                src = className.toJSON();
+                whr = { selector: Object.assign({ className: className }, src.where || {})};
+                className = className.className;
+            } else if (className.className) {
+                src = className;
+                className = src.className;
+                whr = { selector: Object.assign({ className: className }, src.where || {})};
+            }
+        } else {
+            src = src && (typeof vq.toJSON === 'function') ? vq.toJSON() : vq;
+            whr = { selector: Object.assign({ className: className }, src.where || {}) };
+        }
+  
+        if (src && src.limit) {
             whr.limit = src.limit;
         }
-        if (src.order) {
+        if (src && src.order) {
             whr.sort = src.order.split(',').map(function (si) {
                 var rs = {},
                     ord = "asc";
@@ -689,46 +738,90 @@
                         }
 
                         if (!srvSearch) {
-                            return _query_local(className, src, opt);
+                            return _query_local(className, src, opt)
+                                .then(function (rz) {
+                                    return _getTrigger('afterQuery', className, rz, Framework7.utils.extend({src : src, server : false}, opt || {}));
+                                });
                         }
 
                         return _dbAdapters._query.find(className, src, opt)
                             .then(function (rz) {
+                               
+                                return _getTrigger('afterQuery', className, rz, Framework7.utils.extend({src : src, server : true}, opt || {}))
+                                    .then(function (riz) {
+                                            return riz;
+                                        });
+                            })
+                            .then(function (rz) {
+
                                 if (!_db.__collections[className] || !rz.results.length) {
                                     return rz;
                                 }
-                                var vms, pms;
+                                var  pms;
 
-                                vms = rz.results.map(function (ri) {
-                                    ri.className = ri.className || className;
-                                    ri._id = ri._id || className + '#' + ri.objectId;
-                                    return ri;
-                                });
-                                pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
+                               
+                                pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve();
                                
                                 return pms
                                     .then(function () {
-                                        return _getTrigger('beforeSave', className, vms, 
-                                        Framework7.utils.extend({local : true}, opt || {}));
+                                        return _getTrigger('beforeSave', className, rz.results, 
+                                        Framework7.utils.extend({local : true, query : src}, opt || {}));
                                     })
-                                    .then(function () {
-                                    var vck = vms.chunk(5);
-                                    return vck.reduce(function (opm, chv) {
-                                        return opm.then(function () {
-                                            return Promise.all(chv.map(function (ri) {
-                                                var vid = className + '#' + ri.objectId;
-                                                return _db.upsert(vid, function (odc) {
-                                                    return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                                    .then(function (vmi) {
+                                    return  _getLastClassUpdatedAt(className)
+                                        .then(function (doc) {
+                                            var vit,
+                                                dti, vck, mdt;
+                                            if (doc && doc.updatedAt) {
+                                                vit = [];
+                                                dti = new Date(doc.updatedAt).getTime();
+                                                vmi.forEach(function (ff) {
+                                                    var vnd = new Date(ff.updatedAt).getTime();
+                                                    if ( vnd > dti) {
+                                                        vit.push(Framework7.utils.extend({ className : className, 
+                                                                _id :  className + '#' + ff.objectId}, ff));
+                                                        mdt = mdt && (vnd < mdt) ? mdt : vnd;
+                                                    }
                                                 });
-                                            }));
+                                                
+                                            } else {
+                                                vit = vmi.map(function (ff) {
+                                                    var vnd = new Date(ff.updatedAt).getTime();
+                                                    mdt = mdt && (vnd < mdt) ? mdt : vnd;
+                                                    return Framework7.utils.extend({className : className,
+                                                            _id :  className + '#' + ff.objectId}, ff);
+                                                });
+                                            }
+
+                                            vck = vit.chunk(5);
+                                            return vck.reduce(function (opm, chv) {
+                                                return opm.then(function () {
+                                                    return Promise.all(chv.map(function (ri) {
+                                                        var vid = className + '#' + ri.objectId;
+                                                        return _db.upsert(vid, function (odc) {
+                                                            return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
+                                                        });
+                                                    }));
+                                                });
+                                            }, Promise.resolve())
+                                                .then(function () {
+                                                    if (mdt) {
+                                                        doc.updatedAt = mdt;
+                                                         return _db.upsert('_local/db-col-' + className, doc);
+                                                    }
+                                                });
                                         });
-                                    }, Promise.resolve());
+                                   
                                 }).then(function () {
                                     return rz;
                                 });
                             }, function (eri) {
                                 if (eri && (eri.code === 100 || eri.code === 107) && !forceServer) {
-                                    return _query_local(className, src, opt);
+                                    return _query_local(className, src, opt)
+                                        .then(function (rz) {
+                                            return _getTrigger('afterQuery', className, rz, 
+                                                Framework7.utils.extend({src : src, server : false, fallback : true}, opt || {}));
+                                        });
                                 }
                                 return Promise.reject(eri);
                             });
@@ -845,6 +938,7 @@
         }
         return getDatabase(options)
             .then(function () {
+                var idxes = [];
                 return Promise.all(Object.keys(_config.collections)
                     .map(function (mk) {
                         var docId = '_local/db-col-' + mk;
@@ -869,14 +963,28 @@
                                     if (ifl.indexOf('className') === -1) {
                                         ifl.push('className');
                                     }
-                                    return _db.createIndex({ index: { fields: ifl } });
+                                    ifl = ifl.join(',');
+                                    if (idxes.indexOf(ifl) === -1) {
+                                        idxes.push(ifl);
+                                    }
                                 });
 
                             }, Promise.resolve());
                         });
-                    }));
-            }).then(function () {
+                    }))
+                    .then(function () {
+                        return idxes.reduce(function (pms, ik) {
+                            return pms.then(function () {
+                                var fn = ik.split(',');
+                                return _db.createIndex({fields : fn,
+                                    name : fn.join('_')});
+                            });
+                        }, Promise.resolve());
+                    });
+            })
+            .then(function () {
                 _collectionsInited = true;
+                Parse.Database.trigger('inited');
             });
 
     }
@@ -1030,9 +1138,20 @@
         });
     }
 
+    function _getLastClassUpdatedAt(cn) {
+        var ckn = '_local/db-col-' + cn;
+        return _db.get(ckn)["catch"](function (err) {
+            if (err.status !== 404) {
+                throw err;
+            }
+            return { updatedAt: 0 };
+        });
+    }
+    var _syncedToLocal = false;
+
     function _syncToLocal(options) {
         var obs = {};
-
+        _syncedToLocal = false;
         return (options && options.collections ? [options.collections] : Object.keys(_db.__collections).chunk(5)).reduce(function (pms, ark) {
             return pms.then(function () {
                 return Promise.all(ark.map(function (cn) {
@@ -1045,12 +1164,7 @@
                     return Promise.resolve()
                         .then(function () {
                             if (options && !options.forceReload) {
-                                return _db.get(ckn)["catch"](function (err) {
-                                    if (err.status !== 404) {
-                                        throw err;
-                                    }
-                                    return { updatedAt: 0 };
-                                });
+                                return _getLastClassUpdatedAt(cn);
                             }
                             return _db.find({
                                 selector: { className: cn },
@@ -1089,7 +1203,6 @@
                                 npq.greaterThan('updatedAt', new Date(doc.updatedAt));
                             }
                             
-                           
                             return _getTrigger('beforeQuery', cn, npq, Framework7.utils.extend({}, options || {}, { 
                                 fromServer: true,
                                 sync : true
@@ -1120,6 +1233,8 @@
                                     }
                                     return _dbAdapters.query.find(cn, pqs, {
                                         fromServer: true,
+                                        sync : true,
+                                        query : pqs,
                                         beforeSaveLocal: function () {
                                             return toPurge ? _db.bulkDocs(toPurge)['catch'](function (err) {
                                                 console.error(err);
@@ -1157,6 +1272,8 @@
             });
         }, Promise.resolve())
             .then(function () {
+                _syncedToLocal = true;
+                Parse.Database.trigger('synced');
                 return obs;
             });
     }
@@ -1429,7 +1546,7 @@
     // once for each event, not once for a combination of all events.
     Events.once = function (name, callback, context) {
         // Map the event into a `{event: once}` object.
-        var events = eventsApi(onceMap, {}, name, callback, _.bind(this.off, this));
+        var events = eventsApi(onceMap, {}, name, callback, this.off.bind(this));
         if (typeof name === 'string' && context == null) callback = void 0;
         return this.on(events, callback, context);
     };
@@ -1437,7 +1554,7 @@
     // Inversion-of-control versions of `once`.
     Events.listenToOnce = function (obj, name, callback) {
         // Map the event into a `{event: once}` object.
-        var events = eventsApi(onceMap, {}, name, callback, _.bind(this.stopListening, this, obj));
+        var events = eventsApi(onceMap, {}, name, callback, this.stopListening.bind(this,obj));
         return this.listenTo(obj, events);
     };
 
@@ -1555,9 +1672,50 @@
 
     Parse.Events = Events;
 
+    function _run_local_query(qr) {
+        return _query_local(qr)
+            .then(function (fq) {
+                if (qr.count) {
+                    return fq.count;
+                }
+                return fq.results.map(function (pi) {
+                    if (pi._id) {
+                        delete pi._id;
+                    }
+                    if (pi._rev) {
+                        delete pi._rev;
+                    }
+                    return Parse.Object.fromJSON(pi);
+                });
+            });
+    }
+
+    function _waitForDatabase() {
+        return new Promise(function (resolve, reject) {
+            if (_collectionsInited) {
+                return resolve();
+            }
+            Parse.Database.on('inited', resolve);
+        });
+    }
+
+    function _waitForSyncLocal() {
+        return _waitForDatabase()
+            .then(function () {
+                return new Promise(function (resolve, reject) {
+                    if (_syncedToLocal) {
+                        return resolve();
+                    }
+                    Parse.Database.on('synced', resolve);
+                });
+               
+            });
+    }
+
     Parse.Database = {
         APPLICATION_FIRST: 'APPLICATION_FIRST',
         SERVER_FIRST: 'SERVER_FIRST',
+        queryLocal : _query_local,
         onLine: !!navigator.onLine,
         getDatabase: getDatabase,
         configure: _configureDbApp,
@@ -1566,8 +1724,13 @@
         isDirty: isDirty,
         uploadToLocal : _uploadToLocal,
         _initCollections: _initCollections,
+        waitForDatabase : _waitForDatabase,
+        waitForSyncLocal : _waitForSyncLocal,
         _mark_synced: _mark_synced,
-        triggers : {}
+        triggers : {},
+        local : {
+            query : _run_local_query
+        }
     };
 
     extend(Parse.Database, Events);
