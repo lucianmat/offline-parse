@@ -502,7 +502,10 @@
                                     return;
                                 }
                                 target = tgt;
-                                return _dbAdapters._object.save(target, options);
+                                return _dbAdapters._object.save(target, options)
+                                    .then(function () {
+                                        return _getTrigger('afterSave', className, target, Framework7.utils.extend({server : true}, options || {}));
+                                    });
                                 
                             }).then(function (rj) {
 
@@ -533,6 +536,9 @@
                                                 });
                                         }).then(function () {
                                             return _db.upsert(vk, vob)
+                                                .then(function (rz) {
+                                                    return _getTrigger('afterSave', className, rz, Framework7.utils.extend({local : true}, options || {}));
+                                                })
                                                 .then(function () {
                                                     return rj;
                                                 });
@@ -568,6 +574,9 @@
                                             vob.className = className;
                                             vk = target.className + '#' + target._getId();
                                             return _db.upsert(vk, vob)
+                                            .then(function (rz) {
+                                                return _getTrigger('afterSave', className, rz, Framework7.utils.extend({local : true, fallback : true}, options || {}));
+                                            })
                                                 .then(function () {
                                                     return target;
                                                 });
@@ -583,6 +592,9 @@
                         vk = target.className + '#' + target._getId();
 
                         return _db.upsert(vk, vob)
+                            .then(function (rz) {
+                                return _getTrigger('afterSave', className, rz, Framework7.utils.extend({local : true}, options || {}));
+                            })
                             .then(function () {
                                 return _dbAdapters._object.save(target, options)
                                     .then(function (rid) {
@@ -600,7 +612,10 @@
                                             .then(function () {
                                                 vob = rid.toJSON();
                                                 vob.className = className;
-                                                return _db.upsert(nid, vob);
+                                                return _db.upsert(nid, vob)
+                                                .then(function (rz) {
+                                                    return _getTrigger('afterSave', className, rz, Framework7.utils.extend({server : true}, options || {}));
+                                                })
                                             })
                                             .then(function () {
                                                 return rid;
@@ -754,19 +769,12 @@
                             })
                             .then(function (rz) {
 
-                                if (!_db.__collections[className] || !rz.results.length) {
+                                if (!rz || !_db.__collections[className] || !rz.results.length) {
                                     return rz;
                                 }
-                                var  pms;
-
-                               
-                                pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve();
-                               
+                                var  pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve(rz.results);
+                             
                                 return pms
-                                    .then(function () {
-                                        return _getTrigger('beforeSave', className, rz.results, 
-                                        Framework7.utils.extend({local : true, query : src}, opt || {}));
-                                    })
                                     .then(function (vmi) {
                                     return  _getLastClassUpdatedAt(className)
                                         .then(function (doc) {
@@ -798,9 +806,13 @@
                                                 return opm.then(function () {
                                                     return Promise.all(chv.map(function (ri) {
                                                         var vid = className + '#' + ri.objectId;
-                                                        return _db.upsert(vid, function (odc) {
-                                                            return (!odc || (odc.updatedAt === ri.updatedAt)) ? false : ri;
-                                                        });
+                                                        return _getTrigger('beforeSave', className, ri, 
+                                                            Framework7.utils.extend({local : true, query : src}, opt || {}))
+                                                                .then(function (mvi) {
+                                                                    return mvi? _db.upsert(vid, function (odc) {
+                                                                        return (!odc || (odc.updatedAt === mvi.updatedAt)) ? false : mvi;
+                                                                    }) : mvi;
+                                                                });
                                                     }));
                                                 });
                                             }, Promise.resolve())
@@ -1198,7 +1210,18 @@
                                 options.progress({ className: cn, status: 2 });
                             }
                             npq = new Parse.Query(cn);
-                            
+
+                            if (_db.__collections[cn].index && _db.__collections[cn].index.length) {
+                                _db.__collections[cn].index.forEach(function (ii) {
+                                    var inm = ii.split(',');
+                                    inm.forEach(function (ij) {
+                                        if (ij.indexOf('.') === -1) {
+                                            npq.addAscending(ij);
+                                        }
+                                    });
+                                });
+                            }
+
                             if (doc.updatedAt && (!options || !options.forceReload)) {
                                 npq.greaterThan('updatedAt', new Date(doc.updatedAt));
                             }
@@ -1235,14 +1258,20 @@
                                         fromServer: true,
                                         sync : true,
                                         query : pqs,
-                                        beforeSaveLocal: function () {
+                                        beforeSaveLocal: function (rzs) {
                                             return toPurge ? _db.bulkDocs(toPurge)['catch'](function (err) {
                                                 console.error(err);
-                                            }) : Promise.resolve();
+                                            }).then(function () {
+                                                return Promise.resolve(rzs);
+                                            }) : Promise.resolve(rzs);
                                         }
                                     })
                                         .then(function (riz) {
                                             var vi = doc.updatedAt, i, cid;
+                                            if (!riz || !riz.results || !riz.results.length) {
+                                                return;
+                                            }
+
                                             for (i = 0; i < riz.results.length; i++) {
                                                 cid = new Date(riz.results[i].updatedAt);
 
@@ -1712,6 +1741,23 @@
             });
     }
 
+    function _save_local(key, ob) {
+        if (!ob) {
+            ob = key;
+            key = ob.objectId || ob.id || ob._id;
+        }
+        return _db.upsert(key, ob);
+    }
+
+    function _get_local(key) {
+        return _db.get(key)
+            .then(function (dc) {
+                return dc;
+            }, function () {
+                return undefined;
+            });
+    }
+
     Parse.Database = {
         APPLICATION_FIRST: 'APPLICATION_FIRST',
         SERVER_FIRST: 'SERVER_FIRST',
@@ -1729,7 +1775,9 @@
         _mark_synced: _mark_synced,
         triggers : {},
         local : {
-            query : _run_local_query
+            query : _run_local_query,
+            save : _save_local,
+            get : _get_local
         }
     };
 
