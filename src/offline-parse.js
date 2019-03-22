@@ -985,13 +985,28 @@
                         });
                     }))
                     .then(function () {
-                        return idxes.reduce(function (pms, ik) {
-                            return pms.then(function () {
-                                var fn = ik.split(',');
-                                return _db.createIndex({fields : fn,
-                                    name : fn.join('_')});
+                        return _db.getIndexes()
+                            .then(function (ixs) {
+                                var ndxs = ixs || [],
+                                    iln = [];
+                                 idxes.forEach(function(ik) {
+                                    var vk = ik.split(',').join('_'),
+                                        ni = ndxs.indexes.find(function (rf) {
+                                            return rf.name === vk;
+                                        });
+                                    if (!ni && (iln.indexOf(ik) === -1)) {
+                                        iln.push(ik);
+                                    }
+                                });
+                                return iln.reduce(function (pms, ik) {
+                                    return pms.then(function () {
+                                        var fn = ik.split(',');
+                                        return _db.createIndex({fields : fn,
+                                            name : fn.join('_')});
+                                    });
+                                }, Promise.resolve());
                             });
-                        }, Promise.resolve());
+                       
                     });
             })
             .then(function () {
