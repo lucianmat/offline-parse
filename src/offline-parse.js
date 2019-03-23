@@ -738,6 +738,7 @@
                         var srvSearch = !_db.__collections[className] ||
                             _db.__collections[className].mode === Parse.Database.SERVER_FIRST ||
                             _db.__collections[className].updatedAt === 0,
+                            localFirst,
                             forceServer = false;
 
                         if (opt && opt.fromServer) {
@@ -752,10 +753,33 @@
                             delete src.fromServer;
                         }
 
+                        if (src && src.localFirst) {
+                            srvSearch = false;
+                            forceServer = false;
+                            localFirst = src.localFirst;
+                            delete src.localFirst;
+                        }
+
                         if (!srvSearch) {
                             return _query_local(className, src, opt)
                                 .then(function (rz) {
-                                    return _getTrigger('afterQuery', className, rz, Framework7.utils.extend({src : src, server : false}, opt || {}));
+                                    return _getTrigger('afterQuery', className, rz, Framework7.utils.extend({src : src, server : false}, opt || {}))
+                                        .then(function (rz) {
+                                            if (localFirst) {
+                                                setTimeout(function () {
+                                                    _dbAdapters._query.find(className, src, opt)
+                                                        .then(function (nrz) {
+                                                            localFirst(nrz.results.map(function (ri) {
+                                                                ri.className = nrz.className || className;
+                                                                return Parse.Object.fromJSON(ri);
+                                                            }));
+                                                        }, function () {
+                                                            localFirst();
+                                                        });
+                                                });
+                                            }
+                                            return rz;
+                                        });
                                 });
                         }
 
@@ -988,7 +1012,8 @@
                         return _db.getIndexes()
                             .then(function (ixs) {
                                 var ndxs = ixs || [],
-                                    iln = [];
+                                    iln = ['className'];
+                                    
                                  idxes.forEach(function(ik) {
                                     var vk = ik.split(',').join('_'),
                                         ni = ndxs.indexes.find(function (rf) {
@@ -998,6 +1023,7 @@
                                         iln.push(ik);
                                     }
                                 });
+                                
                                 return iln.reduce(function (pms, ik) {
                                     return pms.then(function () {
                                         var fn = ik.split(',');
@@ -1406,9 +1432,6 @@
     // A private global variable to share between listeners and listenees.
     var _listening;
 
-    // Iterates over the standard `event, callback` (as well as the fancy multiple
-    // space-separated events `"change blur", callback` and jQuery-style event
-    // maps `{event: callback}`).
     var eventsApi = function (iteratee, events, name, callback, opts) {
         var i = 0, names;
         if (name && typeof name === 'object') {
@@ -1429,8 +1452,7 @@
         return events;
     };
 
-    // Bind an event to a `callback` function. Passing `"all"` will bind
-    // the callback to all events fired.
+
     Events.on = function (name, callback, context) {
         this._events = eventsApi(onApi, this._events || {}, name, callback, {
             context: context,
@@ -1449,9 +1471,6 @@
         return this;
     };
 
-    // Inversion-of-control versions of `on`. Tell *this* object to listen to
-    // an event in another object... keeping track of what it's listening to
-    // for easier unbinding later.
     Events.listenTo = function (obj, name, callback) {
         if (!obj) return this;
         var id = obj._listenId || (obj._listenId = _.uniqueId('l'));
@@ -1498,10 +1517,7 @@
         }
     };
 
-    // Remove one or many callbacks. If `context` is null, removes all
-    // callbacks with that function. If `callback` is null, removes all
-    // callbacks for the event. If `name` is null, removes all bound
-    // callbacks for all events.
+
     Events.off = function (name, callback, context) {
         if (!this._events) return this;
         this._events = eventsApi(offApi, this._events, name, callback, {
@@ -1584,10 +1600,6 @@
         return events;
     };
 
-    // Bind an event to only be triggered a single time. After the first time
-    // the callback is invoked, its listener will be removed. If multiple events
-    // are passed in using the space-separated syntax, the handler will fire
-    // once for each event, not once for a combination of all events.
     Events.once = function (name, callback, context) {
         // Map the event into a `{event: once}` object.
         var events = eventsApi(onceMap, {}, name, callback, this.off.bind(this));
@@ -1602,8 +1614,7 @@
         return this.listenTo(obj, events);
     };
 
-    // Reduces the event callbacks into a map of `{event: onceWrapper}`.
-    // `offer` unbinds the `onceWrapper` after it has been called.
+
     var onceMap = function (map, name, callback, offer) {
         if (callback) {
             var once = map[name] = _.once(function () {
@@ -1615,10 +1626,7 @@
         return map;
     };
 
-    // Trigger one or many events, firing all bound callbacks. Callbacks are
-    // passed the same arguments as `trigger` is, apart from the event name
-    // (unless you're listening on `"all"`, which will cause your callback to
-    // receive the true name of the event as the first argument).
+
     Events.trigger = function (name) {
         if (!this._events) return this;
 
@@ -1642,9 +1650,7 @@
         return objEvents;
     };
 
-    // A difficult-to-believe, but optimized internal dispatch function for
-    // triggering events. Tries to keep the usual cases speedy (most internal
-    // Backbone events have 3 arguments).
+
     var triggerEvents = function (events, args) {
         var ev, i = -1, l = events.length, a1 = args[0], a2 = args[1], a3 = args[2];
         switch (args.length) {
@@ -1656,8 +1662,7 @@
         }
     };
 
-    // A listening class that tracks and cleans up memory bindings
-    // when all callbacks have been offed.
+
     var Listening = function (listener, obj) {
         this.id = listener._listenId;
         this.listener = listener;
@@ -1669,10 +1674,6 @@
 
     Listening.prototype.on = Events.on;
 
-    // Offs a callback (or several).
-    // Uses an optimized counter if the listenee uses Backbone.Events.
-    // Otherwise, falls back to manual tracking to support events
-    // library interop.
     Listening.prototype.off = function (name, callback) {
         var cleanup;
         if (this.interop) {
