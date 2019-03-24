@@ -404,6 +404,62 @@
                 });
     }
 
+    function _sync_results_to_local(opt, rz, className) {
+        var  pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve(rz.results);
+                             
+                                return pms
+                                    .then(function (vmi) {
+                                    return  _getLastClassUpdatedAt(className)
+                                        .then(function (doc) {
+                                            var vit,
+                                                dti, vck, mdt;
+                                            if (doc && doc.updatedAt) {
+                                                vit = [];
+                                                dti = new Date(doc.updatedAt).getTime();
+                                                vmi.forEach(function (ff) {
+                                                    var vnd = new Date(ff.updatedAt).getTime();
+                                                    if ( vnd > dti) {
+                                                        vit.push(Framework7.utils.extend({ className : className, 
+                                                                _id :  className + '#' + ff.objectId}, ff));
+                                                        mdt = mdt && (vnd < mdt) ? mdt : vnd;
+                                                    }
+                                                });
+                                                
+                                            } else {
+                                                vit = vmi.map(function (ff) {
+                                                    var vnd = new Date(ff.updatedAt).getTime();
+                                                    mdt = mdt && (vnd < mdt) ? mdt : vnd;
+                                                    return Framework7.utils.extend({className : className,
+                                                            _id :  className + '#' + ff.objectId}, ff);
+                                                });
+                                            }
+
+                                            vck = vit.chunk(5);
+                                            return vck.reduce(function (opm, chv) {
+                                                return opm.then(function () {
+                                                    return Promise.all(chv.map(function (ri) {
+                                                        var vid = className + '#' + ri.objectId;
+                                                        return _getTrigger('beforeSave', className, ri, 
+                                                            Framework7.utils.extend({local : true, query : src}, opt || {}))
+                                                                .then(function (mvi) {
+                                                                    return mvi? _db.upsert(vid, function (odc) {
+                                                                        return (!odc || (odc.updatedAt === mvi.updatedAt)) ? false : mvi;
+                                                                    }) : mvi;
+                                                                });
+                                                    }));
+                                                });
+                                            }, Promise.resolve())
+                                                .then(function () {
+                                                    if (mdt) {
+                                                        doc.updatedAt = mdt;
+                                                         return _db.upsert('_local/db-col-' + className, doc);
+                                                    }
+                                                });
+                                        });
+                                   
+    }); 
+}
+
     var _dbAdapters = {
         object: {
             destroy: function (target, options) {
@@ -769,10 +825,13 @@
                                                 setTimeout(function () {
                                                     _dbAdapters._query.find(className, src, opt)
                                                         .then(function (nrz) {
-                                                            localFirst(nrz.results.map(function (ri) {
-                                                                ri.className = nrz.className || className;
-                                                                return Parse.Object.fromJSON(ri);
-                                                            }));
+                                                            _sync_results_to_local(opt, nrz, className)
+                                                                .then(function () {
+                                                                    localFirst(nrz.results.map(function (ri) {
+                                                                        ri.className = nrz.className || className;
+                                                                        return Parse.Object.fromJSON(ri);
+                                                                    }));
+                                                                });
                                                         }, function () {
                                                             localFirst();
                                                         });
@@ -787,70 +846,12 @@
                             .then(function (rz) {
                                
                                 return _getTrigger('afterQuery', className, rz, Framework7.utils.extend({src : src, server : true}, opt || {}))
-                                    .then(function (riz) {
-                                            return riz;
-                                        });
-                            })
-                            .then(function (rz) {
-
-                                if (!rz || !_db.__collections[className] || !rz.results.length) {
-                                    return rz;
-                                }
-                                var  pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve(rz.results);
-                             
-                                return pms
-                                    .then(function (vmi) {
-                                    return  _getLastClassUpdatedAt(className)
-                                        .then(function (doc) {
-                                            var vit,
-                                                dti, vck, mdt;
-                                            if (doc && doc.updatedAt) {
-                                                vit = [];
-                                                dti = new Date(doc.updatedAt).getTime();
-                                                vmi.forEach(function (ff) {
-                                                    var vnd = new Date(ff.updatedAt).getTime();
-                                                    if ( vnd > dti) {
-                                                        vit.push(Framework7.utils.extend({ className : className, 
-                                                                _id :  className + '#' + ff.objectId}, ff));
-                                                        mdt = mdt && (vnd < mdt) ? mdt : vnd;
-                                                    }
-                                                });
-                                                
-                                            } else {
-                                                vit = vmi.map(function (ff) {
-                                                    var vnd = new Date(ff.updatedAt).getTime();
-                                                    mdt = mdt && (vnd < mdt) ? mdt : vnd;
-                                                    return Framework7.utils.extend({className : className,
-                                                            _id :  className + '#' + ff.objectId}, ff);
-                                                });
-                                            }
-
-                                            vck = vit.chunk(5);
-                                            return vck.reduce(function (opm, chv) {
-                                                return opm.then(function () {
-                                                    return Promise.all(chv.map(function (ri) {
-                                                        var vid = className + '#' + ri.objectId;
-                                                        return _getTrigger('beforeSave', className, ri, 
-                                                            Framework7.utils.extend({local : true, query : src}, opt || {}))
-                                                                .then(function (mvi) {
-                                                                    return mvi? _db.upsert(vid, function (odc) {
-                                                                        return (!odc || (odc.updatedAt === mvi.updatedAt)) ? false : mvi;
-                                                                    }) : mvi;
-                                                                });
-                                                    }));
-                                                });
-                                            }, Promise.resolve())
-                                                .then(function () {
-                                                    if (mdt) {
-                                                        doc.updatedAt = mdt;
-                                                         return _db.upsert('_local/db-col-' + className, doc);
-                                                    }
-                                                });
-                                        });
-                                   
-                                }).then(function () {
-                                    return rz;
-                                });
+                                     .then(function (rz) {
+                                        if (!rz || !_db.__collections[className] || !rz.results.length) {
+                                            return rz;
+                                        }
+                                        return _sync_results_to_local(opt, rz, className);
+                                    }); 
                             }, function (eri) {
                                 if (eri && (eri.code === 100 || eri.code === 107) && !forceServer) {
                                     return _query_local(className, src, opt)
@@ -1405,7 +1406,7 @@
         });
         pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(vms) : Promise.resolve();
        
-        return opt && opt.useBulks ?
+        return (opt && opt.useBulks ?
             pms.then(function () {
                 return _db.bulkDocs(vms);
             })
@@ -1421,7 +1422,23 @@
                     }));
                 });
             }, Promise.resolve());
-        }).then(function () {
+        }))
+        .then(function () {
+            return _getLastClassUpdatedAt(className)
+                .then(function (doc) {
+                    var dti = (doc && doc.updatedAt) ? new Date(doc.updatedAt).getTime() : 0,
+                    dtv = results.reduce(function (ov, ndtv) {
+                        var vi = new Date(ndtv.updatedAt).getTime();
+                        return ov > vi ? ov : vi; 
+                    }, dti);
+                    if (dtv != dti) {
+                        doc.updatedAt = dtv;
+                        return _db.upsert('_local/db-col-' + className, doc);
+                    }
+                    return;
+                });
+        })
+        .then(function () {
             return results;
         });
     }
