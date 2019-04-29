@@ -607,6 +607,7 @@
                                     if (err && err.code) {
 
                                         if ((err.code === 209) ||
+                                            (err.code === 141) ||
                                             (err.code === 142) ||
                                             (err.code === 137) ||
                                             (err.code === 119) ||
@@ -615,7 +616,7 @@
                                             (err.code === 104) ||
                                             (err.code === 103)) {
                                             Parse.Database.trigger('error', err);
-                                            return;
+                                            return Promise.reject(err);
                                         }
                                     }
 
