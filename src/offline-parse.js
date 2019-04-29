@@ -404,7 +404,7 @@
                 });
     }
 
-    function _sync_results_to_local(opt, rz, className) {
+    function _sync_results_to_local(opt, rz, className, src) {
         var  pms = opt && opt.beforeSaveLocal ? opt.beforeSaveLocal(rz.results) : Promise.resolve(rz.results);
                              
                                 return pms
@@ -825,7 +825,7 @@
                                                 setTimeout(function () {
                                                     _dbAdapters._query.find(className, src, opt)
                                                         .then(function (nrz) {
-                                                            _sync_results_to_local(opt, nrz, className)
+                                                            _sync_results_to_local(opt, nrz, className, src)
                                                                 .then(function () {
                                                                     localFirst(nrz.results.map(function (ri) {
                                                                         ri.className = nrz.className || className;
@@ -850,7 +850,10 @@
                                         if (!rz || !_db.__collections[className] || !rz.results.length) {
                                             return rz;
                                         }
-                                        return _sync_results_to_local(opt, rz, className);
+                                        return _sync_results_to_local(opt, rz, className, src)
+                                            .then(function () {
+                                                return rz;
+                                            });
                                     }); 
                             }, function (eri) {
                                 if (eri && (eri.code === 100 || eri.code === 107|| eri.code === 124) && !forceServer) {
@@ -1342,7 +1345,7 @@
                                     if (eri && eri.code !== 100 && eri.code !== 107 && eri.code !== 124) {
                                         return Promise.reject(eri);
                                     }
-                                    
+
                                 });
                         });
                 }));
