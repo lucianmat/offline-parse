@@ -853,7 +853,7 @@
                                         return _sync_results_to_local(opt, rz, className);
                                     }); 
                             }, function (eri) {
-                                if (eri && (eri.code === 100 || eri.code === 107) && !forceServer) {
+                                if (eri && (eri.code === 100 || eri.code === 107|| eri.code === 124) && !forceServer) {
                                     return _query_local(className, src, opt)
                                         .then(function (rz) {
                                             return _getTrigger('afterQuery', className, rz, 
@@ -1337,6 +1337,12 @@
                                             obs[cn] = rd.updated ? doc.updatedAt : false;
                                             return obs;
                                         });
+                                })
+                                .catch(function (eri) {
+                                    if (eri && eri.code !== 100 && eri.code !== 107 && eri.code !== 124) {
+                                        return Promise.reject(eri);
+                                    }
+                                    
                                 });
                         });
                 }));
