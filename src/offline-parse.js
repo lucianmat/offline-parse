@@ -401,6 +401,7 @@
             },
                 function (i) {
                     Framework7.log(i);
+                    return Promise.reject(i);
                 });
     }
 
@@ -580,6 +581,16 @@
                                             if (vk === nid) {
                                                 return Promise.resolve();
                                             }
+                                            if (rj._localId) {
+                                                vob.vLocalId = rj._localId;
+                                            }
+                                            if (!vob.createdAt) {
+                                                vob.createdAt = (new Date()).toISOString();
+                                            }
+                                            if (!vob.updatedAt) {
+                                                vob.updatedAt = vob.createdAt ||  (new Date()).toISOString();
+                                            }
+
                                             return _db.get(vk)['catch'](function () {
                                                 return false;
                                             })
@@ -630,6 +641,15 @@
                                             vob = target.toJSON();
                                             vob.className = className;
                                             vk = target.className + '#' + target._getId();
+                                            if (target._localId) {
+                                                vob.vLocalId = target._localId;
+                                            }
+                                            if (!vob.createdAt) {
+                                                vob.createdAt = (new Date()).toISOString();
+                                            }
+                                            if (!vob.updatedAt) {
+                                                vob.updatedAt = vob.createdAt ||  (new Date()).toISOString();
+                                            }
                                             return _db.upsert(vk, vob)
                                             .then(function (rz) {
                                                 return _getTrigger('afterSave', className, rz, Framework7.utils.extend({local : true, fallback : true}, options || {}));
@@ -647,7 +667,9 @@
                         vob = target.toJSON();
                         vob.className = className;
                         vk = target.className + '#' + target._getId();
-
+                        if (target._localId) {
+                            vob.vLocalId = target._localId;
+                        }
                         return _db.upsert(vk, vob)
                             .then(function (rz) {
                                 return _getTrigger('afterSave', className, rz, Framework7.utils.extend({local : true}, options || {}));
@@ -669,6 +691,9 @@
                                             .then(function () {
                                                 vob = rid.toJSON();
                                                 vob.className = className;
+                                                if (rid._localId) {
+                                                    vob.vLocalId = rid._localId;
+                                                }
                                                 return _db.upsert(nid, vob)
                                                 .then(function (rz) {
                                                     return _getTrigger('afterSave', className, rz, Framework7.utils.extend({server : true}, options || {}));
@@ -776,6 +801,10 @@
                                         }
                                         if (obi._rev) {
                                             delete obi._rev;
+                                        }
+                                        if (obi.vLocalId) {
+                                            target._localId = obi.vLocalId;
+                                            delete obi.vLocalId;
                                         }
                                         target._finishFetch(obi);
                                     }
@@ -1742,6 +1771,20 @@
         }
     });
 
+    Parse.Object.prototype._getId = function () {
+        if (typeof this.id === 'string') {
+            return this.id;
+          }
+    
+          if (typeof this._localId === 'string') {
+            return this._localId;
+          }
+    
+          this._localId = (parseInt(localStorage.getItem('localIdCount') || 0) ) + 1;
+          localStorage.setItem('localIdCount',  this._localId);
+          return this._localId;
+    }
+
     Parse.Events = Events;
 
     function _run_local_query(qr) {
@@ -1751,13 +1794,22 @@
                     return fq.count;
                 }
                 return fq.results.map(function (pi) {
+                    var lid, rzi;
                     if (pi._id) {
                         delete pi._id;
                     }
                     if (pi._rev) {
                         delete pi._rev;
                     }
-                    return Parse.Object.fromJSON(pi);
+                    if (pi.vLocalId) {
+                        lid = pi.vLocalId;
+                        delete pi.vLocalId;
+                    }
+                    rzi = Parse.Object.fromJSON(pi);
+                    if (lid) {
+                        rzi._localId  = lid;
+                    }
+                    return rzi;
                 });
             });
     }
