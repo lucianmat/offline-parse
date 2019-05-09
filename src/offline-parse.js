@@ -1779,9 +1779,9 @@
           if (typeof this._localId === 'string') {
             return this._localId;
           }
-    
-          this._localId = (parseInt(localStorage.getItem('localIdCount') || 0) ) + 1;
-          localStorage.setItem('localIdCount',  this._localId);
+          var lidc = +(parseInt(localStorage.getItem('localIdCount') || 0) ) + 1;
+          this._localId = 'local' +lidc;
+          localStorage.setItem('localIdCount',  lidc);
           return this._localId;
     }
 
