@@ -19,6 +19,19 @@
             NONE: 'none'
         };
 
+    if (typeof XMLHttpRequest !== 'undefined') {
+      if (typeof XMLHttpRequest.prototype.open === 'function') {
+           var opold = XMLHttpRequest.prototype.open;
+           XMLHttpRequest.prototype.open = function(method, url, async , user, password) {
+                if (typeof Parse !== 'undefined' && !!Parse.serverURL && (url.indexOf(Parse.serverURL) === 0)) {
+                    if ((typeof this.timeout === undefined) || this.timeout === 0) {
+                        this.timeout = Parse.Database.DEFAULT_TIMEOUT; // default timeout 5 seconds
+                    }
+                }
+               opold.call(this, method, url, async , user, password);
+           }
+       }
+    }
     if (!Array.isArray) {
         Array.isArray = function (arg) {
             return Object.prototype.toString.call(arg) === '[object Array]';
@@ -1141,6 +1154,10 @@
                                 return rd ? _db.remove(rd) : false;
                             });
                     });
+            },
+            getAllKeysAsync : function () {
+                // not really implemented
+                return Promise.resolve([]);
             }
         });
         return Promise.resolve(_db);
@@ -1855,6 +1872,7 @@
 
     Parse.Database = {
         APPLICATION_FIRST: 'APPLICATION_FIRST',
+        DEFAULT_TIMEOUT : 5000,
         SERVER_FIRST: 'SERVER_FIRST',
         queryLocal : _query_local,
         onLine: !!navigator.onLine,
